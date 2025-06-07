@@ -110,7 +110,7 @@
         }
 
         .container:hover::before {
-            opacity: 0.3;
+            /* opacity: 0.3; */
         }
 
         @keyframes slideIn {
@@ -818,12 +818,18 @@
                 reader.onload = function(e) {
                     fileContent = e.target.result;
                     
-                    // Extract table name from first INSERT statement
-                    const tableMatch = fileContent.match(/INSERT INTO `([^`]+)`/);
+                    // Extract table name from first INSERT statement - fixed to handle spaces
+                    const tableMatch = fileContent.match(/INSERT INTO `([^`]+)`/) || 
+                                     fileContent.match(/INSERT INTO ([^\s(]+)/);
                     if (tableMatch) {
                         originalTableName = tableMatch[1];
                         document.getElementById('tableName').value = originalTableName;
                         document.getElementById('tableNameInfo').textContent = `📌 Original: ${originalTableName}`;
+                        
+                        // Debug: Log the extracted table name
+                        console.log('Extracted table name:', originalTableName);
+                    } else {
+                        console.error('Could not extract table name from file');
                     }
                 };
                 reader.readAsText(file);
@@ -991,14 +997,23 @@
                 
                 // First, replace table name throughout the content if it has changed
                 if (newTableName && originalTableName && newTableName !== originalTableName) {
-                    // Count occurrences before replacement
-                    const beforeCount = (content.match(new RegExp(escapeRegExp(originalTableName), 'g')) || []).length;
+                    // Debug log
+                    console.log('Replacing table name:', originalTableName, '->', newTableName);
+                    
+                    const escapedOriginal = escapeRegExp(originalTableName);
+                    
+                    // Count occurrences in different contexts
+                    const backtickCount = (content.match(new RegExp('`' + escapedOriginal + '`', 'g')) || []).length;
+                    const singleQuoteCount = (content.match(new RegExp("'" + escapedOriginal + "'", 'g')) || []).length;
+                    const totalCount = backtickCount + singleQuoteCount;
                     
                     // Replace all occurrences of the original table name with the new one
-                    content = content.replace(new RegExp(escapeRegExp(originalTableName), 'g'), newTableName);
+                    // Handle both backtick-quoted and single-quoted table names
+                    content = content.replace(new RegExp('`' + escapedOriginal + '`', 'g'), '`' + newTableName + '`');
+                    content = content.replace(new RegExp("'" + escapedOriginal + "'", 'g'), "'" + newTableName + "'");
                     
-                    diagnostics.tableNameReplacements = beforeCount;
-                    diagnostics.debug.push(`✅ Replaced "${originalTableName}" with "${newTableName}" (${beforeCount} occurrences)`);
+                    diagnostics.tableNameReplacements = totalCount;
+                    diagnostics.debug.push(`✅ Replaced "${originalTableName}" with "${newTableName}" (${totalCount} occurrences: ${backtickCount} in backticks, ${singleQuoteCount} in quotes)`);
                 }
                 
                 // Find all INSERT statements
@@ -1042,19 +1057,24 @@
             content = content.replace(/--.*$/gm, '');
             content = content.replace(/\/\*[\s\S]*?\*\//g, '');
             
-            // Find INSERT statements - handle multi-line
+            // Find INSERT statements - handle multi-line and case-insensitive
             let currentPos = 0;
             while (currentPos < content.length) {
-                const insertMatch = content.indexOf('INSERT INTO', currentPos);
+                // Case-insensitive search for INSERT INTO
+                const searchStr = content.substring(currentPos).toUpperCase();
+                const insertMatch = searchStr.indexOf('INSERT INTO');
+                
                 if (insertMatch === -1) break;
                 
+                const actualPos = currentPos + insertMatch;
+                
                 // Find the end of this statement (semicolon not in quotes)
-                let statementEnd = findStatementEnd(content, insertMatch);
+                let statementEnd = findStatementEnd(content, actualPos);
                 if (statementEnd === -1) {
-                    statementEnd = content.length;
+                    statementEnd = content.length - 1;
                 }
                 
-                const statement = content.substring(insertMatch, statementEnd + 1);
+                const statement = content.substring(actualPos, statementEnd + 1);
                 statements.push(statement);
                 
                 currentPos = statementEnd + 1;
@@ -1099,8 +1119,9 @@
         }
 
         function processSingleInsert(statement, diagnostics) {
-            // Extract table name
-            const tableMatch = statement.match(/INSERT INTO\s+`?([^`\s]+)`?\s*/i);
+            // Extract table name - fixed to properly handle spaces in table names
+            const tableMatch = statement.match(/INSERT INTO\s+`([^`]+)`/i) || 
+                              statement.match(/INSERT INTO\s+([^\s(]+)/i);
             if (!tableMatch) {
                 throw new Error('Could not extract table name');
             }
